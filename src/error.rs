@@ -5,10 +5,13 @@ use zbus::DBusError;
 pub enum Error {
     AlgorithmUnsupported(String),
     ItemExists(String),
-    ItemIsDeleted,
+    ItemIsDeleted(String),
     CollectionAliasExists(String),
-    CollectionIsDeleted,
+    CollectionIsDeleted(String),
     ConfigError(config::ConfigError),
+    IsLocked(String),
+    NoSession(String),
+    NoSuchObject(String),
     SessionIsClosed,
     Zbus(zbus::Error),
 }
@@ -25,9 +28,26 @@ impl DBusError for Error {
     fn name(&self) -> zbus_names::ErrorName<'_> {
         match self {
             Error::AlgorithmUnsupported(_) => {
-                zbus_names::ErrorName::try_from("org.freedesktop.DBus.Error.NotSupported").unwrap()
+                zbus_names::ErrorName::try_from("org.freedesktop.DBus.Error.NotSupported")
+                    .expect("well-known error name")
             }
-            _ => zbus_names::ErrorName::try_from("org.freedesktop.DBus.Error.Failed").unwrap(),
+            Error::IsLocked(_) => {
+                zbus_names::ErrorName::try_from("org.freedesktop.Secret.Error.IsLocked")
+                    .expect("well-known error name from the Secret Service spec")
+            }
+            Error::NoSession(_) => {
+                zbus_names::ErrorName::try_from("org.freedesktop.Secret.Error.NoSession")
+                    .expect("well-known error name from the Secret Service spec")
+            }
+            // Although `org.freedesktop.DBus.Error.UnknownObject` would also work here,
+            // the secret service spec defines a more precise error for these cases.
+            // https://specifications.freedesktop.org/secret-service-spec/latest/errors.html#id-1.3.5.5
+            Error::NoSuchObject(_) | Error::ItemIsDeleted(_) | Error::CollectionIsDeleted(_) => {
+                zbus_names::ErrorName::try_from("org.freedesktop.Secret.Error.NoSuchObject")
+                    .expect("well-known error name from the Secret Service spec")
+            }
+            _ => zbus_names::ErrorName::try_from("org.freedesktop.DBus.Error.Failed")
+                .expect("well-known error name"),
         }
     }
     fn description(&self) -> Option<&str> {
@@ -41,21 +61,33 @@ impl fmt::Display for Error {
         match self {
             Error::AlgorithmUnsupported(algorithm) => write!(
                 f,
-                "Attempted to open a session with an unsupported algorithm: '{}'",
+                "Cannot open a session with unsupported algorithm: '{}'",
                 algorithm
+            ),
+            Error::IsLocked(object_path) => write!(
+                f,
+                "The object '{}' must be unlocked before this action can be carried out",
+                object_path
             ),
             Error::ItemExists(object_path) => write!(
                 f,
-                "An Item with Object Path '{}' already exists and not asked to replace",
+                "The item '{}' already exists and not asked to replace",
                 object_path
             ),
-            Error::ItemIsDeleted => write!(f, "Attempted to operate on deleted item"),
             Error::CollectionAliasExists(alias) => {
                 write!(f, "A collection with alias '{}' already exists", alias)
             }
-            Error::CollectionIsDeleted => write!(f, "Attempted to operate on deleted collection"),
             Error::ConfigError(inner) => write!(f, "{}", inner),
+            Error::NoSuchObject(object)
+            | Error::ItemIsDeleted(object)
+            | Error::CollectionIsDeleted(object) => {
+                write!(f, "No such object exists: '{}'", object)
+            }
+            Error::NoSession(object_path) => {
+                write!(f, "A session '{}' does not exist", object_path)
+            }
             Error::SessionIsClosed => write!(f, "Session cannot be used as it is closed"),
+
             Error::Zbus(inner) => write!(f, "{}", inner),
         }
     }

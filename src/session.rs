@@ -1,3 +1,8 @@
+//! Implementation of `org.freedesktop.Secret.Session` D-Bus interface.
+//!
+//! The state tracked by the `Session` is used to encrypt and decrypt
+//! secrets. So, although not part of the `org.freedesktop.Secret.Session`
+//! D-Bus interface, we implement encryption and decryption methods here.
 use aes::cipher::{block_padding, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
 use hkdf;
 use sha2;
@@ -7,6 +12,11 @@ use crate::error;
 type Aes128CbcEnc = cbc::Encryptor<aes::Aes128>;
 type Aes128CbcDec = cbc::Decryptor<aes::Aes128>;
 
+/// Supported encryption algorithms.
+///
+/// Based on: https://specifications.freedesktop.org/secret-service-spec/latest/transfer-secrets.html,
+/// only two algorithms are supported: `Algorithm::Plain` or `Algorithm::Dh`
+/// short for dh-ietf1024-sha256-aes128-cbc-pkcs7.
 #[derive(Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub enum Algorithm {
     Plain,
@@ -47,6 +57,9 @@ pub struct Session {
     pub object_path: zvariant::OwnedObjectPath,
 }
 
+/// Builder pattern implementation for `Session`.
+///
+/// This allows separating the encryption algorithm setup (when necessary).
 pub struct SessionBuilder {
     object_path: zvariant::OwnedObjectPath,
 }

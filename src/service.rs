@@ -3,6 +3,7 @@ use std::str;
 
 use crate::collection;
 use crate::error;
+use crate::item;
 use crate::secret;
 use crate::session;
 
@@ -27,7 +28,7 @@ impl Service {
         }
     }
 
-    pub fn add_session(&mut self, session: session::Session) -> &session::Session {
+    pub fn insert_session(&mut self, session: session::Session) -> &session::Session {
         let key = session.object_path.as_ref().to_string();
 
         self.sessions.insert(key.clone(), session);
@@ -36,24 +37,41 @@ impl Service {
             .expect("key must exist as it was just inserted")
     }
 
-    pub fn add_collection(
+    pub fn create_collection_internal(
         &mut self,
         collection: collection::Collection,
     ) -> Result<&collection::Collection, error::Error> {
         let key = collection.object_path.as_ref().to_string();
 
-        if let Some(alias) = collection.alias.as_ref() {
-            self.add_collection_alias(&collection.object_path.as_ref(), alias)?;
+        self.collections.insert(key.clone(), collection);
+        let (inserted_collection_path, inserted_collection_alias) = {
+            let inserted_collection = self
+                .collections
+                .get(&key)
+                .expect("just inserted value should be present");
+
+            (
+                inserted_collection.object_path.clone(),
+                inserted_collection.alias.clone(),
+            )
+        };
+
+        if let Some(alias) = inserted_collection_alias {
+            self.try_insert_collection_alias(&inserted_collection_path.as_ref(), &alias)?;
         }
 
-        self.collections.insert(key.clone(), collection);
+        log::info!(
+            "Created collection at '{}'",
+            inserted_collection_path.as_str()
+        );
+
         Ok(self
             .collections
             .get(&key)
             .expect("key must exist as it was just inserted"))
     }
 
-    pub fn add_collection_alias(
+    pub fn try_insert_collection_alias(
         &mut self,
         object_path: &zvariant::ObjectPath<'_>,
         alias: &str,
@@ -70,6 +88,113 @@ impl Service {
                 Err(error::Error::CollectionAliasExists(entry.key().to_owned()))
             }
         }
+    }
+
+    pub fn try_update_collection_alias(
+        &mut self,
+        object_path: &zvariant::ObjectPath<'_>,
+        alias: &str,
+    ) -> Result<String, error::Error> {
+        let key = alias.to_owned();
+        let collection_object_path = object_path.as_ref().to_string();
+
+        let collection = self
+            .collections
+            .get_mut(&collection_object_path)
+            .ok_or(error::Error::NoSuchObject(collection_object_path.clone()))?;
+        collection.alias = Some(alias.to_owned());
+
+        match self.aliases.entry(key) {
+            collections::hash_map::Entry::Vacant(entry) => {
+                let inserted_entry = entry.insert(collection_object_path);
+                Ok(inserted_entry.to_string())
+            }
+            collections::hash_map::Entry::Occupied(mut entry) => {
+                let old_entry = entry.insert(collection_object_path);
+                Ok(old_entry)
+            }
+        }
+    }
+
+    pub fn try_lock_collection(
+        &mut self,
+        object_path: &zvariant::ObjectPath<'_>,
+    ) -> Result<(), error::Error> {
+        let collection = self
+            .get_mut_collection_by_path(object_path)
+            .ok_or(error::Error::NoSuchObject(object_path.as_str().to_owned()))?;
+        collection.locked = true;
+        Ok(())
+    }
+
+    pub fn try_unlock_collection(
+        &mut self,
+        object_path: &zvariant::ObjectPath<'_>,
+    ) -> Result<(), error::Error> {
+        let collection = self
+            .get_mut_collection_by_path(object_path)
+            .ok_or(error::Error::NoSuchObject(object_path.as_str().to_owned()))?;
+        collection.locked = false;
+        Ok(())
+    }
+
+    pub fn get_mut_collection_by_path(
+        &mut self,
+        object_path: &zvariant::ObjectPath<'_>,
+    ) -> Option<&mut collection::Collection> {
+        let collection_object_path = object_path.as_ref().to_string();
+        self.collections.get_mut(&collection_object_path)
+    }
+
+    pub fn try_lock_item(
+        &mut self,
+        object_path: &zvariant::ObjectPath<'_>,
+    ) -> Result<(), error::Error> {
+        let item = self
+            .get_mut_item_by_path(object_path)
+            .ok_or(error::Error::NoSuchObject(object_path.as_str().to_owned()))?;
+        item.locked = true;
+        Ok(())
+    }
+
+    pub fn try_unlock_item(
+        &mut self,
+        object_path: &zvariant::ObjectPath<'_>,
+    ) -> Result<(), error::Error> {
+        let item = self
+            .get_mut_item_by_path(object_path)
+            .ok_or(error::Error::NoSuchObject(object_path.as_str().to_owned()))?;
+        item.locked = false;
+        Ok(())
+    }
+
+    pub fn get_mut_item_by_path(
+        &mut self,
+        object_path: &zvariant::ObjectPath<'_>,
+    ) -> Option<&mut item::Item> {
+        let item_object_path = object_path.as_ref().to_string();
+
+        for (_, collection) in self.collections.iter_mut() {
+            if let Some(item) = collection.items.get_mut(&item_object_path) {
+                return Some(item);
+            }
+        }
+        None
+    }
+
+    pub fn remove_collection_alias(&mut self, alias: &str) -> Option<String> {
+        self.aliases.remove(alias)
+    }
+
+    pub fn collection_exists(&self, object_path: &zvariant::ObjectPath<'_>) -> bool {
+        self.collections.contains_key(object_path.as_str())
+    }
+
+    pub fn create_default_collection(&mut self) -> Result<zvariant::ObjectPath<'_>, error::Error> {
+        let new_collection = collection::Collection::new_default(self);
+        let added_collection = self.create_collection_internal(new_collection)?;
+
+        Ok(added_collection.object_path.as_ref())
     }
 }
 
@@ -100,7 +225,7 @@ impl Service {
                     Some(alias),
                     &self,
                 );
-                let added_collection = self.add_collection(new_collection)?;
+                let added_collection = self.create_collection_internal(new_collection)?;
 
                 emitter.collection_created().await?;
 
@@ -113,7 +238,7 @@ impl Service {
             let collection_id = uuid::Uuid::new_v4();
             let new_collection =
                 collection::Collection::new(&collection_id, &properties.label, None, &self);
-            let added_collection = self.add_collection(new_collection)?;
+            let added_collection = self.create_collection_internal(new_collection)?;
 
             emitter.collection_created().await?;
 
@@ -161,10 +286,23 @@ impl Service {
 
     /// Lock method
     async fn lock(
-        &self,
+        &mut self,
         objects: Vec<zvariant::ObjectPath<'_>>,
     ) -> (Vec<zvariant::OwnedObjectPath>, zvariant::OwnedObjectPath) {
-        (Vec::new(), zvariant::OwnedObjectPath::default())
+        let mut locked = Vec::new();
+
+        for object in objects.iter() {
+            if let Ok(()) = self.try_lock_collection(object) {
+                locked.push(zvariant::OwnedObjectPath::try_from(object.as_str()).unwrap());
+                continue;
+            }
+
+            if let Ok(()) = self.try_lock_item(object) {
+                locked.push(zvariant::OwnedObjectPath::try_from(object.as_str()).unwrap());
+            }
+        }
+
+        (locked, zvariant::OwnedObjectPath::try_from("/").unwrap())
     }
 
     /// OpenSession method
@@ -179,7 +317,7 @@ impl Service {
         match algorithm {
             "plain" => {
                 let session = session::Session::new(&session_id).plain();
-                let added_session = self.add_session(session);
+                let added_session = self.insert_session(session);
 
                 Ok((
                     zvariant::Value::new("").try_to_owned().unwrap(),
@@ -189,7 +327,7 @@ impl Service {
             "dh-ietf1024-sha256-aes128-cbc-pkcs7" => {
                 let (session, server_public_key) = session::Session::new(&session_id)
                     .dh(public_key.as_str().as_bytes().try_into().unwrap());
-                let added_session = self.add_session(session);
+                let added_session = self.insert_session(session);
 
                 Ok((
                     zvariant::Value::new(str::from_utf8(&server_public_key).unwrap())
@@ -246,14 +384,43 @@ impl Service {
     }
 
     /// SetAlias method
-    fn set_alias(&mut self, name: &str, collection: zvariant::ObjectPath<'_>) {}
+    fn set_alias(
+        &mut self,
+        name: &str,
+        collection: zvariant::ObjectPath<'_>,
+    ) -> Result<(), error::Error> {
+        if !self.collection_exists(&collection) {
+            Err(error::Error::NoSuchObject(collection.as_str().to_owned()))
+        } else {
+            if collection.as_str() == "/" {
+                self.remove_collection_alias(name);
+            } else {
+                self.try_update_collection_alias(&collection, name)?;
+            }
+
+            Ok(())
+        }
+    }
 
     /// Unlock method
     fn unlock(
-        &self,
+        &mut self,
         objects: Vec<zvariant::ObjectPath<'_>>,
     ) -> (Vec<zvariant::OwnedObjectPath>, zvariant::OwnedObjectPath) {
-        (Vec::new(), zvariant::OwnedObjectPath::default())
+        let mut unlocked = Vec::new();
+
+        for object in objects.iter() {
+            if let Ok(()) = self.try_unlock_collection(object) {
+                unlocked.push(zvariant::OwnedObjectPath::try_from(object.as_str()).unwrap());
+                continue;
+            }
+
+            if let Ok(()) = self.try_unlock_item(object) {
+                unlocked.push(zvariant::OwnedObjectPath::try_from(object.as_str()).unwrap());
+            }
+        }
+
+        (unlocked, zvariant::OwnedObjectPath::try_from("/").unwrap())
     }
 
     /// CollectionChanged signal

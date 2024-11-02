@@ -1,4 +1,4 @@
-//! # D-Bus interface proxy for: `org.freedesktop.Secret.Collection`
+//! Implementation of `org.freedesktop.Secret.Collection` D-Bus interface.
 use std::collections;
 use std::time;
 
@@ -6,6 +6,7 @@ use crate::error;
 use crate::item;
 use crate::secret;
 use crate::service;
+use crate::service::ServiceSignals;
 
 #[derive(Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct Collection {
@@ -61,9 +62,34 @@ impl Collection {
         }
     }
 
+    pub fn new_default(service: &service::Service) -> Self {
+        let object_path = "/org/freedesktop/secrets/aliases/default".to_owned();
+        let path = zvariant::OwnedObjectPath::try_from(object_path).unwrap();
+
+        let created = time::SystemTime::now()
+            .duration_since(time::SystemTime::UNIX_EPOCH)
+            .expect("current SystemTime before UNIX EPOCH")
+            .as_secs();
+
+        Self {
+            alias: Some("default".to_string()),
+            created,
+            deleted: false,
+            items: collections::HashMap::new(),
+            label: "default".to_string(),
+            locked: true,
+            lookup_attributes: collections::HashMap::new(),
+            modified: created,
+            object_path: path,
+            parent_path: service.object_path.clone(),
+        }
+    }
+
     pub fn error_if_deleted(&self) -> Result<(), error::Error> {
         if self.deleted == true {
-            Err(error::Error::CollectionIsDeleted)
+            Err(error::Error::CollectionIsDeleted(
+                self.object_path.as_str().to_owned(),
+            ))
         } else {
             Ok(())
         }
@@ -193,6 +219,7 @@ impl Collection {
         } else {
             emitter.item_created().await?;
         }
+        emitter.collection_changed().await?;
 
         Ok((
             added_item.object_path.as_ref(),

@@ -1,8 +1,11 @@
-//! # D-Bus interface for: `org.freedesktop.Secret.Item`
+//! Implementation of `org.freedesktop.Secret.Item` D-Bus interface.
+//!
+//!
 use std::collections;
 use std::time;
 
 use crate::collection;
+use crate::collection::CollectionSignals;
 use crate::error;
 use crate::secret;
 use crate::service;
@@ -82,7 +85,9 @@ impl Item {
 
     pub fn error_if_deleted(&self) -> Result<(), error::Error> {
         if self.deleted == true {
-            Err(error::Error::ItemIsDeleted)
+            Err(error::Error::ItemIsDeleted(
+                self.object_path.as_str().to_owned(),
+            ))
         } else {
             Ok(())
         }
@@ -169,6 +174,7 @@ impl Item {
         &mut self,
         secret: secret::Secret,
         #[zbus(object_server)] object_server: &zbus::ObjectServer,
+        #[zbus(signal_emitter)] emitter: zbus::object_server::SignalEmitter<'_>,
     ) -> Result<(), error::Error> {
         self.error_if_deleted()?;
 
@@ -196,6 +202,8 @@ impl Item {
         };
 
         self.secret = plaintext;
+
+        emitter.item_changed().await?;
 
         Ok(())
     }

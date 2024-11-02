@@ -25,12 +25,14 @@ impl SecretServiceServer {
     }
 
     pub async fn run(self) -> Result<(), error::Error> {
-        let interface = service::Service::new();
+        let mut interface = service::Service::new();
+        interface.create_default_collection()?;
+        let service_path = interface.object_path.clone();
 
         let dbus_name = self.dbus_name;
         self.connection
             .object_server()
-            .at(interface.object_path.clone(), interface)
+            .at(&service_path, interface)
             .await?;
 
         self.connection.request_name(dbus_name.as_str()).await?;
