@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: -D warnings
+      RUST_BACKTRACE: full
+      SSS_LOG_LEVEL: trace
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt,clippy
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: |
+          cargo --locked fmt -- --check
+
+      - name: Lint with clippy
+        run: |
+          cargo --locked clippy
+
+  test:
+    runs-on: ubuntu-latest
+    needs: lint
+    env:
+      RUSTFLAGS: -D warnings
+      RUST_BACKTRACE: full
+      SSS_LOG_LEVEL: trace
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Dbus
+        run: |
+          sudo mkdir -p /run/user/$UID |
+          sed -e s/UID/$UID/ -e s/PATH/path/ ./session-local.conf > /tmp/session-local.conf
+          sudo apt-get install -y dbus
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build and Test
+        run: |
+          dbus-run-session --config-file /tmp/session-local.conf -- cargo --locked test --verbose
