@@ -2,6 +2,10 @@
 name = "secret-service-server-rs"
 version = "0.1.0"
 edition = "2021"
+description = "A server for the Secret Service API implemented in Rust"
+license = "MIT"
+authors = ["Tomás Farías Santana <tomas@tomasfarias.dev>"]
+repository = "https://github.com/tomasfarias/secret-service-server-rs"
 
 [dependencies]
 aes = "0.8.4"
