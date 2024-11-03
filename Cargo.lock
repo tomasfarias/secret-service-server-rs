@@ -1122,6 +1122,7 @@ dependencies = [
  "cbc",
  "cipher",
  "config",
+ "event-listener",
  "generic-array 1.1.0",
  "hkdf",
  "log",

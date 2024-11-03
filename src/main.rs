@@ -5,46 +5,9 @@ mod collection;
 mod error;
 mod item;
 mod secret;
+mod server;
 mod service;
 mod session;
-
-#[derive(Debug)]
-pub struct SecretServiceServer {
-    connection: zbus::Connection,
-    dbus_name: String,
-}
-
-impl SecretServiceServer {
-    pub async fn new(dbus_name: &str) -> Result<Self, error::Error> {
-        let connection = zbus::Connection::session().await?;
-
-        Ok(Self {
-            connection,
-            dbus_name: dbus_name.to_owned(),
-        })
-    }
-
-    pub async fn run(self) -> Result<(), error::Error> {
-        let mut interface = service::Service::new();
-        interface.create_default_collection()?;
-        let service_path = interface.object_path.clone();
-
-        let dbus_name = self.dbus_name;
-        self.connection
-            .object_server()
-            .at(&service_path, interface)
-            .await?;
-
-        self.connection.request_name(dbus_name.as_str()).await?;
-
-        log::info!("Dbus assigned name '{dbus_name}' to secret service server");
-
-        loop {
-            // Handling D-Bus messages is done in the background
-            std::future::pending::<()>().await;
-        }
-    }
-}
 
 #[tokio::main]
 async fn main() -> Result<(), error::Error> {
@@ -79,7 +42,8 @@ async fn main() -> Result<(), error::Error> {
     let dbus_name: String = settings
         .get("dbus_name")
         .expect("dus_name defaults to 'org.freedesktop.secrets'");
-    let server = SecretServiceServer::new(&dbus_name).await?;
+
+    let server = server::SecretServiceServer::new(&dbus_name, event_listener::Event::new()).await?;
     server.run().await?;
 
     Ok(())
