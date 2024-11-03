@@ -60,7 +60,7 @@ impl Item {
         let session = service
             .sessions
             .get(&secret.session.as_ref().to_string())
-            .unwrap();
+            .ok_or(error::Error::NoSession(secret.session.as_ref().to_string()))?;
 
         let plaintext = if session.is_encrypted() {
             let iv = secret.parameters;
@@ -71,7 +71,7 @@ impl Item {
         };
 
         Ok(Self {
-            attributes: attributes.unwrap_or_else(collections::HashMap::new),
+            attributes: attributes.unwrap_or_default(),
             created,
             deleted: false,
             label: label.to_owned(),
@@ -84,7 +84,7 @@ impl Item {
     }
 
     pub fn error_if_deleted(&self) -> Result<(), error::Error> {
-        if self.deleted == true {
+        if self.deleted {
             Err(error::Error::ItemIsDeleted(
                 self.object_path.as_str().to_owned(),
             ))
@@ -122,7 +122,7 @@ impl Item {
         self.emit_deleted(object_server).await?;
         self.deleted = true;
 
-        Ok(zvariant::ObjectPath::try_from("/").unwrap())
+        Ok(zvariant::ObjectPath::try_from("/").expect("well-known path should not fail"))
     }
 
     /// GetSecret method

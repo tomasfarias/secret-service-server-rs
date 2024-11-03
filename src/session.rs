@@ -4,8 +4,6 @@
 //! secrets. So, although not part of the `org.freedesktop.Secret.Session`
 //! D-Bus interface, we implement encryption and decryption methods here.
 use aes::cipher::{block_padding, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
-use hkdf;
-use sha2;
 
 use crate::error;
 
@@ -39,12 +37,9 @@ impl Algorithm {
 
     pub fn decrypt(&self, ciphertext: &[u8], iv: &[u8]) -> Vec<u8> {
         match self {
-            Algorithm::Dh { aes_key } => {
-                let plaintext = Aes128CbcDec::new(aes_key.into(), iv.into())
-                    .decrypt_padded_vec_mut::<block_padding::Pkcs7>(ciphertext)
-                    .unwrap();
-                plaintext
-            }
+            Algorithm::Dh { aes_key } => Aes128CbcDec::new(aes_key.into(), iv.into())
+                .decrypt_padded_vec_mut::<block_padding::Pkcs7>(ciphertext)
+                .unwrap(),
             Algorithm::Plain => ciphertext.to_vec(),
         }
     }
@@ -93,9 +88,7 @@ impl SessionBuilder {
 
         (
             Session {
-                algorithm: Algorithm::Dh {
-                    aes_key: output.into(),
-                },
+                algorithm: Algorithm::Dh { aes_key: output },
                 closed: false,
                 object_path: self.object_path,
             },
@@ -105,19 +98,19 @@ impl SessionBuilder {
 }
 
 impl Session {
-    pub fn new(id: &uuid::Uuid) -> SessionBuilder {
+    pub fn new_with_id(id: &uuid::Uuid) -> SessionBuilder {
         let mut object_path = "/org/freedesktop/secrets/session/".to_owned();
         object_path.push_str(
             id.as_simple()
                 .encode_lower(&mut uuid::Uuid::encode_buffer()),
         );
-        let path = zvariant::OwnedObjectPath::try_from(object_path).unwrap();
+        let path = zvariant::OwnedObjectPath::try_from(object_path).expect("path is valid");
 
         SessionBuilder { object_path: path }
     }
 
     pub fn error_if_closed(&self) -> Result<(), error::Error> {
-        if self.closed == true {
+        if self.closed {
             Err(error::Error::SessionIsClosed)
         } else {
             Ok(())

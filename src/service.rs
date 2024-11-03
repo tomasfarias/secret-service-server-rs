@@ -219,7 +219,7 @@ impl Service {
         alias: &str,
         #[zbus(signal_emitter)] emitter: zbus::object_server::SignalEmitter<'_>,
     ) -> Result<(zvariant::ObjectPath<'_>, zvariant::ObjectPath<'_>), error::Error> {
-        if alias != "" {
+        if !alias.is_empty() {
             if let Some(collection_key) = self.aliases.get(alias) {
                 Ok((
                     self.collections
@@ -227,7 +227,7 @@ impl Service {
                         .expect("alias is added with each collection")
                         .object_path
                         .as_ref(),
-                    zvariant::ObjectPath::try_from("/").unwrap(),
+                    zvariant::ObjectPath::try_from("/").expect("well-known path should not fail"),
                 ))
             } else {
                 let collection_id = uuid::Uuid::new_v4();
@@ -235,7 +235,7 @@ impl Service {
                     &collection_id,
                     &properties.label,
                     Some(alias),
-                    &self,
+                    self,
                 );
                 let added_collection = self.create_collection_internal(new_collection)?;
 
@@ -243,20 +243,20 @@ impl Service {
 
                 Ok((
                     added_collection.object_path.as_ref(),
-                    zvariant::ObjectPath::try_from("/").unwrap(),
+                    zvariant::ObjectPath::try_from("/").expect("well-known path should not fail"),
                 ))
             }
         } else {
             let collection_id = uuid::Uuid::new_v4();
             let new_collection =
-                collection::Collection::new(&collection_id, &properties.label, None, &self);
+                collection::Collection::new(&collection_id, &properties.label, None, self);
             let added_collection = self.create_collection_internal(new_collection)?;
 
             emitter.collection_created().await?;
 
             Ok((
                 added_collection.object_path.as_ref(),
-                zvariant::ObjectPath::try_from("/").unwrap(),
+                zvariant::ObjectPath::try_from("/").expect("well-known path should not fail"),
             ))
         }
     }
@@ -286,7 +286,8 @@ impl Service {
                     let secret = found_item.get_secret(session_path, object_server).await?;
 
                     secrets_map.insert(
-                        zvariant::OwnedObjectPath::try_from(item_str).unwrap(),
+                        zvariant::OwnedObjectPath::try_from(item_str)
+                            .expect("existing path should not fail"),
                         secret,
                     );
                 }
@@ -305,16 +306,25 @@ impl Service {
 
         for object in objects.iter() {
             if let Ok(()) = self.try_lock_collection(object) {
-                locked.push(zvariant::OwnedObjectPath::try_from(object.as_str()).unwrap());
+                locked.push(
+                    zvariant::OwnedObjectPath::try_from(object.as_str())
+                        .expect("existing path should not fail"),
+                );
                 continue;
             }
 
             if let Ok(()) = self.try_lock_item(object) {
-                locked.push(zvariant::OwnedObjectPath::try_from(object.as_str()).unwrap());
+                locked.push(
+                    zvariant::OwnedObjectPath::try_from(object.as_str())
+                        .expect("existing path should not fail"),
+                );
             }
         }
 
-        (locked, zvariant::OwnedObjectPath::try_from("/").unwrap())
+        (
+            locked,
+            zvariant::OwnedObjectPath::try_from("/").expect("well-known path should not fail"),
+        )
     }
 
     /// OpenSession method
@@ -328,7 +338,7 @@ impl Service {
 
         match algorithm {
             "plain" => {
-                let session = session::Session::new(&session_id).plain();
+                let session = session::Session::new_with_id(&session_id).plain();
                 let added_session = self.insert_session(session);
 
                 Ok((
@@ -337,7 +347,7 @@ impl Service {
                 ))
             }
             "dh-ietf1024-sha256-aes128-cbc-pkcs7" => {
-                let (session, server_public_key) = session::Session::new(&session_id)
+                let (session, server_public_key) = session::Session::new_with_id(&session_id)
                     .dh(public_key.as_str().as_bytes().try_into().unwrap());
                 let added_session = self.insert_session(session);
 
@@ -355,9 +365,10 @@ impl Service {
     /// ReadAlias method
     fn read_alias(&self, name: &str) -> zvariant::OwnedObjectPath {
         if let Some(matching_collection) = self.aliases.get(name) {
-            zvariant::OwnedObjectPath::try_from(matching_collection.as_str()).unwrap()
+            zvariant::OwnedObjectPath::try_from(matching_collection.as_str())
+                .expect("existing path should not fail")
         } else {
-            zvariant::OwnedObjectPath::try_from("/").unwrap()
+            zvariant::OwnedObjectPath::try_from("/").expect("well-known path should not fail")
         }
     }
 
@@ -382,10 +393,15 @@ impl Service {
                             .get(path.as_str())
                             .expect("item must exist");
                         if !item.locked && !collection.locked {
-                            unlocked
-                                .push(zvariant::OwnedObjectPath::try_from(path.as_str()).unwrap())
+                            unlocked.push(
+                                zvariant::OwnedObjectPath::try_from(path.as_str())
+                                    .expect("existing path should not fail"),
+                            )
                         } else {
-                            locked.push(zvariant::OwnedObjectPath::try_from(path.as_str()).unwrap())
+                            locked.push(
+                                zvariant::OwnedObjectPath::try_from(path.as_str())
+                                    .expect("existing path should not fail"),
+                            )
                         }
                     }
                 }
@@ -423,16 +439,25 @@ impl Service {
 
         for object in objects.iter() {
             if let Ok(()) = self.try_unlock_collection(object) {
-                unlocked.push(zvariant::OwnedObjectPath::try_from(object.as_str()).unwrap());
+                unlocked.push(
+                    zvariant::OwnedObjectPath::try_from(object.as_str())
+                        .expect("existing path should not fail"),
+                );
                 continue;
             }
 
             if let Ok(()) = self.try_unlock_item(object) {
-                unlocked.push(zvariant::OwnedObjectPath::try_from(object.as_str()).unwrap());
+                unlocked.push(
+                    zvariant::OwnedObjectPath::try_from(object.as_str())
+                        .expect("existing path should not fail"),
+                );
             }
         }
 
-        (unlocked, zvariant::OwnedObjectPath::try_from("/").unwrap())
+        (
+            unlocked,
+            zvariant::OwnedObjectPath::try_from("/").expect("well-known path should not fail"),
+        )
     }
 
     /// CollectionChanged signal
@@ -683,6 +708,11 @@ mod tests {
         let body = reply.body();
         let (collection_object_path, _): (zvariant::ObjectPath<'_>, zvariant::ObjectPath<'_>) =
             body.deserialize().unwrap();
+
+        assert_ne!(
+            collection_object_path,
+            zvariant::ObjectPath::try_from("/").unwrap()
+        );
 
         let reply = connection
             .call_method(

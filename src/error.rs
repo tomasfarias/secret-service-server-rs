@@ -8,7 +8,7 @@ pub enum Error {
     ItemIsDeleted(String),
     CollectionAliasExists(String),
     CollectionIsDeleted(String),
-    ConfigError(config::ConfigError),
+    Config(config::ConfigError),
     IsLocked(String),
     NoSession(String),
     NoSuchObject(String),
@@ -77,7 +77,7 @@ impl fmt::Display for Error {
             Error::CollectionAliasExists(alias) => {
                 write!(f, "A collection with alias '{}' already exists", alias)
             }
-            Error::ConfigError(inner) => write!(f, "{}", inner),
+            Error::Config(inner) => write!(f, "{}", inner),
             Error::NoSuchObject(object)
             | Error::ItemIsDeleted(object)
             | Error::CollectionIsDeleted(object) => {
@@ -107,6 +107,6 @@ impl From<zbus::Error> for Error {
 
 impl From<config::ConfigError> for Error {
     fn from(value: config::ConfigError) -> Error {
-        Error::ConfigError(value)
+        Error::Config(value)
     }
 }

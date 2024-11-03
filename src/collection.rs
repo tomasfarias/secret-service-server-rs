@@ -41,7 +41,7 @@ impl Collection {
             id.as_simple()
                 .encode_lower(&mut uuid::Uuid::encode_buffer()),
         );
-        let path = zvariant::OwnedObjectPath::try_from(object_path).unwrap();
+        let path = zvariant::OwnedObjectPath::try_from(object_path).expect("path is valid");
 
         let created = time::SystemTime::now()
             .duration_since(time::SystemTime::UNIX_EPOCH)
@@ -64,7 +64,8 @@ impl Collection {
 
     pub fn new_default(service: &service::Service) -> Self {
         let object_path = "/org/freedesktop/secrets/aliases/default".to_owned();
-        let path = zvariant::OwnedObjectPath::try_from(object_path).unwrap();
+        let path = zvariant::OwnedObjectPath::try_from(object_path)
+            .expect("well-known path should not fail");
 
         let created = time::SystemTime::now()
             .duration_since(time::SystemTime::UNIX_EPOCH)
@@ -86,7 +87,7 @@ impl Collection {
     }
 
     pub fn error_if_deleted(&self) -> Result<(), error::Error> {
-        if self.deleted == true {
+        if self.deleted {
             Err(error::Error::CollectionIsDeleted(
                 self.object_path.as_str().to_owned(),
             ))
@@ -208,7 +209,7 @@ impl Collection {
             secret,
             &properties.label,
             Some(properties.attributes),
-            &self,
+            self,
             object_server,
         )
         .await?;
@@ -223,7 +224,7 @@ impl Collection {
 
         Ok((
             added_item.object_path.as_ref(),
-            zvariant::ObjectPath::try_from("/").unwrap(),
+            zvariant::ObjectPath::try_from("/").expect("well-known path should not fail"),
         ))
     }
 
@@ -237,7 +238,7 @@ impl Collection {
         self.emit_deleted(object_server).await?;
         self.deleted = true;
 
-        Ok(zvariant::ObjectPath::try_from("/").unwrap())
+        Ok(zvariant::ObjectPath::try_from("/").expect("well-known path should not fail"))
     }
 
     /// SearchItems method
@@ -252,14 +253,12 @@ impl Collection {
             .filter_map(|(key, value)| {
                 let attributes_key = (key.clone(), value.clone());
 
-                if let Some(paths) = self.lookup_attributes.get(&attributes_key) {
-                    Some(paths.iter().map(|s| {
+                self.lookup_attributes.get(&attributes_key).map(|paths| {
+                    paths.iter().map(|s| {
                         zvariant::OwnedObjectPath::try_from(s.clone())
                             .expect("path stored should be valid")
-                    }))
-                } else {
-                    None
-                }
+                    })
+                })
             })
             .flatten()
             .collect())
@@ -295,7 +294,10 @@ impl Collection {
         Ok(self
             .items
             .keys()
-            .map(|key| zvariant::OwnedObjectPath::try_from(key.as_str()).unwrap())
+            .map(|key| {
+                zvariant::OwnedObjectPath::try_from(key.as_str())
+                    .expect("existing path should not fail")
+            })
             .collect())
     }
 
