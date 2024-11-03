@@ -1,0 +1,2 @@
+* secret-service-server-rs
+A server for the Secret Service API implemented in rust :crab:.
