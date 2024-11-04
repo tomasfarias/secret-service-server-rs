@@ -6,6 +6,7 @@
 use aes::cipher::{block_padding, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
 
 use crate::error;
+use crate::object::SecretServiceDbusObject;
 
 type Aes128CbcEnc = cbc::Encryptor<aes::Aes128>;
 type Aes128CbcDec = cbc::Decryptor<aes::Aes128>;
@@ -15,7 +16,7 @@ type Aes128CbcDec = cbc::Decryptor<aes::Aes128>;
 /// Based on: https://specifications.freedesktop.org/secret-service-spec/latest/transfer-secrets.html,
 /// only two algorithms are supported: `Algorithm::Plain` or `Algorithm::Dh`
 /// short for dh-ietf1024-sha256-aes128-cbc-pkcs7.
-#[derive(Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, PartialEq, serde::Deserialize, serde::Serialize, Clone, Copy)]
 pub enum Algorithm {
     Plain,
     Dh { aes_key: [u8; 16] },
@@ -45,30 +46,48 @@ impl Algorithm {
     }
 }
 
-#[derive(Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub struct Session {
     pub algorithm: Algorithm,
-    closed: bool,
-    pub object_path: zvariant::OwnedObjectPath,
+    id: uuid::Uuid,
 }
 
-/// Builder pattern implementation for `Session`.
-///
-/// This allows separating the encryption algorithm setup (when necessary).
-pub struct SessionBuilder {
-    object_path: zvariant::OwnedObjectPath,
+impl SecretServiceDbusObject for Session {
+    fn get_object_path(&self) -> zvariant::OwnedObjectPath {
+        let mut object_path = "/org/freedesktop/secrets/session/".to_owned();
+        object_path.push_str(
+            self.id
+                .as_simple()
+                .encode_lower(&mut uuid::Uuid::encode_buffer()),
+        );
+        zvariant::ObjectPath::from_str_unchecked(&object_path).into()
+    }
+
+    /// Override default trait method implementation to provide a better error.
+    ///
+    /// A `Session` not found should return a `NoSession` error instead of the
+    /// generic `NoSuchObject`.
+    async fn get_interface_from_object_path<'p>(
+        object_path: &'p zvariant::ObjectPath<'_>,
+        object_server: &'p zbus::ObjectServer,
+    ) -> Result<zbus::object_server::InterfaceRef<Session>, error::Error> {
+        let interface_ref = object_server
+            .interface::<_, Self>(object_path)
+            .await
+            .map_err(|_| error::Error::NoSession(object_path.as_str().to_owned()))?;
+        Ok(interface_ref)
+    }
 }
 
-impl SessionBuilder {
-    pub fn plain(self) -> Session {
+impl Session {
+    pub fn new_plain() -> Session {
         Session {
             algorithm: Algorithm::Plain,
-            closed: false,
-            object_path: self.object_path,
+            id: uuid::Uuid::new_v4(),
         }
     }
 
-    pub fn dh(self, client_public_key: [u8; 32]) -> (Session, [u8; 32]) {
+    pub fn new_dh(client_public_key: [u8; 32]) -> (Session, [u8; 32]) {
         let secret = x25519_dalek::EphemeralSecret::random();
         let public_key = x25519_dalek::PublicKey::from(&secret);
 
@@ -89,32 +108,10 @@ impl SessionBuilder {
         (
             Session {
                 algorithm: Algorithm::Dh { aes_key: output },
-                closed: false,
-                object_path: self.object_path,
+                id: uuid::Uuid::new_v4(),
             },
             public_key.to_bytes(),
         )
-    }
-}
-
-impl Session {
-    pub fn new_with_id(id: &uuid::Uuid) -> SessionBuilder {
-        let mut object_path = "/org/freedesktop/secrets/session/".to_owned();
-        object_path.push_str(
-            id.as_simple()
-                .encode_lower(&mut uuid::Uuid::encode_buffer()),
-        );
-        let path = zvariant::OwnedObjectPath::try_from(object_path).expect("path is valid");
-
-        SessionBuilder { object_path: path }
-    }
-
-    pub fn error_if_closed(&self) -> Result<(), error::Error> {
-        if self.closed {
-            Err(error::Error::SessionIsClosed)
-        } else {
-            Ok(())
-        }
     }
 
     pub fn encrypt(&self, plaintext: &[u8]) -> (Vec<u8>, Vec<u8>) {
@@ -136,11 +133,11 @@ impl Session {
 #[zbus::interface(name = "org.freedesktop.Secret.Session")]
 impl Session {
     /// Close method
-    fn close(&mut self) -> Result<(), error::Error> {
-        self.error_if_closed()?;
-
-        self.closed = true;
-
+    async fn close(
+        &mut self,
+        #[zbus(object_server)] object_server: &zbus::ObjectServer,
+    ) -> Result<(), error::Error> {
+        self.remove::<Session>(object_server).await?;
         Ok(())
     }
 }

@@ -1,13 +1,10 @@
 use std::env;
 use std::path;
 
-mod collection;
 mod error;
-mod item;
+mod object;
 mod secret;
 mod server;
-mod service;
-mod session;
 
 #[tokio::main]
 async fn main() -> Result<(), error::Error> {

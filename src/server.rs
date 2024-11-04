@@ -1,5 +1,7 @@
 use crate::error;
-use crate::service;
+use crate::object::collection;
+use crate::object::service;
+use crate::object::SecretServiceDbusObject;
 
 #[derive(Debug)]
 pub struct SecretServiceServer {
@@ -23,16 +25,34 @@ impl SecretServiceServer {
     }
 
     pub async fn run(self) -> Result<(), error::Error> {
-        let mut interface = service::Service::new();
-        interface.create_default_collection()?;
-        let service_path = interface.object_path.clone();
+        let service = service::Service::new();
+        let (interface_path, _) = service.serve_at(self.connection.object_server()).await?;
 
-        let dbus_name = self.dbus_name;
-        self.connection
-            .object_server()
-            .at(&service_path, interface)
+        let interface = service::Service::get_interface_from_object_path(
+            &interface_path.as_ref(),
+            self.connection.object_server(),
+        )
+        .await?;
+
+        log::info!("Serving Secret Service interface.");
+
+        let properties = collection::CollectionReadWriteProperties {
+            label: "default".to_owned(),
+        };
+        interface
+            .get_mut()
+            .await
+            .create_collection(
+                properties,
+                "default",
+                self.connection.object_server(),
+                interface.signal_emitter().to_owned(),
+            )
             .await?;
 
+        log::info!("Created default collection.");
+
+        let dbus_name = self.dbus_name;
         self.connection.request_name(dbus_name.as_str()).await?;
 
         log::info!("Dbus assigned name '{dbus_name}' to secret service server");

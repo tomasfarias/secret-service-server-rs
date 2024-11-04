@@ -13,16 +13,18 @@ cbc = "0.1.2"
 cipher = { version = "0.4.4", features = ["block-padding", "alloc"] }
 config = { version = "^0.14.0", features = ["toml"] }
 event-listener = "^5.3"
+futures = "^0.3.31"
 generic-array = { version = "1.1.0", features = ["alloc"] }
 hkdf = "0.12.4"
 log = { version = "^0.4.22", features = ["kv"] }
 uuid = { version = "^1.11", features = ["v4", "fast-rng"] }
 serde = { version = "^1.0", features = ["derive"] }
 structured-logger = "^1.0"
-tokio = { version = "1.41.0", features = ["rt", "rt-multi-thread", "macros"] }
+tokio = { version = "1.41.0", features = ["rt", "rt-multi-thread", "macros", "sync"] }
+tokio-stream = "0.1"
 sha2 = "0.10.8"
 x25519-dalek = { version = "2", features = ["getrandom"] }
-zbus = { version = "^5.0", features = ["tokio"] }
-zbus_names = "^4.0"
-zvariant = "^5.0"
-zvariant_derive = "^5.0"
+zbus = { version = "^5.1", features = ["tokio"] }
+zbus_names = "^4.1"
+zvariant = "^5.1"
+zvariant_derive = "^5.1"

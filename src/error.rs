@@ -14,6 +14,7 @@ pub enum Error {
     NoSuchObject(String),
     SessionIsClosed,
     Zbus(zbus::Error),
+    Zvariant(zvariant::Error),
 }
 
 impl DBusError for Error {
@@ -89,6 +90,7 @@ impl fmt::Display for Error {
             Error::SessionIsClosed => write!(f, "Session cannot be used as it is closed"),
 
             Error::Zbus(inner) => write!(f, "{}", inner),
+            Error::Zvariant(inner) => write!(f, "{}", inner),
         }
     }
 }
@@ -102,6 +104,12 @@ impl From<Error> for zbus::fdo::Error {
 impl From<zbus::Error> for Error {
     fn from(value: zbus::Error) -> Error {
         Error::Zbus(value)
+    }
+}
+
+impl From<zvariant::Error> for Error {
+    fn from(value: zvariant::Error) -> Error {
+        Error::Zvariant(value)
     }
 }
 
