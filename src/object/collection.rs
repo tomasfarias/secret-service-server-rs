@@ -295,3 +295,226 @@ impl Collection {
     pub async fn item_deleted(emitter: &zbus::object_server::SignalEmitter<'_>)
         -> zbus::Result<()>;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::secret;
+    use crate::server;
+
+    use std::time;
+    use uuid;
+
+    /// Run a `org.freedesktop.Secret.Service` server.
+    ///
+    /// This coroutine is meant to be awaited at the beginning of each test
+    /// function that will be making calls to test the server.
+    /// It returns a handle that **must** be aborted once the test is done,
+    /// as otherwise the task **runs forever**.
+    async fn run_service_server() -> (String, tokio::task::JoinHandle<()>) {
+        let start_event = event_listener::Event::new();
+        let start_event_listener = start_event.listen();
+        let mut dbus_name = "org.freedesktop.secrets-test-".to_owned();
+        let dbus_id = uuid::Uuid::new_v4();
+        dbus_name.push_str(
+            dbus_id
+                .as_simple()
+                .encode_lower(&mut uuid::Uuid::encode_buffer()),
+        );
+
+        let cloned_dbus_name = dbus_name.clone();
+        let run_server_handle = tokio::spawn(async move {
+            let server = server::SecretServiceServer::new(&cloned_dbus_name, start_event)
+                .await
+                .unwrap();
+            server.run().await.unwrap();
+        });
+
+        if let Err(_) =
+            tokio::time::timeout(time::Duration::from_secs(10), start_event_listener).await
+        {
+            if run_server_handle.is_finished() {
+                run_server_handle.await.unwrap();
+                panic!("Server exited early without an error");
+            } else {
+                panic!("Took to long to start test dbus server");
+            }
+        }
+
+        (dbus_name, run_server_handle)
+    }
+
+    async fn create_collection(
+        dbus_name: &str,
+        label: &str,
+    ) -> Result<zvariant::OwnedObjectPath, error::Error> {
+        let connection = zbus::Connection::session().await?;
+        let collection_properties = collections::HashMap::from([(
+            "org.freedesktop.Secret.Collection.Label",
+            zvariant::Value::new(label),
+        )]);
+
+        let reply = connection
+            .call_method(
+                Some(dbus_name),
+                "/org/freedesktop/secrets",
+                Some("org.freedesktop.Secret.Service"),
+                "CreateCollection",
+                &(collection_properties, ""),
+            )
+            .await
+            .unwrap();
+
+        let body = reply.body();
+        let (collection_object_path, _): (zvariant::ObjectPath<'_>, zvariant::ObjectPath<'_>) =
+            body.deserialize().unwrap();
+
+        Ok(collection_object_path.into())
+    }
+
+    async fn open_plain_session(
+        dbus_name: &str,
+    ) -> Result<zvariant::OwnedObjectPath, error::Error> {
+        let connection = zbus::Connection::session().await?;
+
+        let reply = connection
+            .call_method(
+                Some(dbus_name),
+                "/org/freedesktop/secrets",
+                Some("org.freedesktop.Secret.Service"),
+                "OpenSession",
+                &("plain", zvariant::Value::from("")),
+            )
+            .await
+            .unwrap();
+
+        let body = reply.body();
+        let (_, session_path): (zvariant::Value, zvariant::ObjectPath<'_>) =
+            body.deserialize().unwrap();
+
+        Ok(session_path.into())
+    }
+
+    #[tokio::test]
+    async fn test_create_item() -> Result<(), error::Error> {
+        let (dbus_name, run_server_handle) = run_service_server().await;
+        let session_path = open_plain_session(dbus_name.as_str()).await?;
+        let collection_object_path =
+            create_collection(dbus_name.as_str(), "test-collection-label").await?;
+
+        let connection = zbus::Connection::session().await?;
+        let item_properties = item::ItemReadWriteProperties {
+            attributes: collections::HashMap::new(),
+            label: "test-item-label".to_owned(),
+        };
+
+        let secret = secret::Secret {
+            session: session_path,
+            value: "a-very-important-secret".into(),
+            parameters: Vec::new(),
+            content_type: "text/plain; charset=utf8".to_string(),
+        };
+        let reply = connection
+            .call_method(
+                Some(dbus_name.as_str()),
+                collection_object_path.as_str(),
+                Some("org.freedesktop.Secret.Collection"),
+                "CreateItem",
+                &(item_properties, secret, false),
+            )
+            .await
+            .unwrap();
+
+        let body = reply.body();
+        let (item_object_path, prompt): (zvariant::ObjectPath<'_>, zvariant::ObjectPath<'_>) =
+            body.deserialize().unwrap();
+
+        let reply = connection
+            .call_method(
+                Some(dbus_name.as_str()),
+                &item_object_path,
+                Some("org.freedesktop.DBus.Properties"),
+                "Get",
+                &(
+                    "org.freedesktop.Secret.Item".to_string(),
+                    "Label".to_string(),
+                ),
+            )
+            .await
+            .unwrap();
+
+        let body = reply.body();
+        let item_value = body.deserialize::<zvariant::Value>().unwrap();
+        let item_label: String = item_value.downcast().unwrap();
+
+        assert!(item_object_path.starts_with(collection_object_path.as_str()));
+        assert_eq!(prompt.as_str(), "/");
+        assert_eq!(item_label.as_str(), "test-item-label");
+
+        run_server_handle.abort();
+        assert!(run_server_handle.await.unwrap_err().is_cancelled());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_search_items() -> Result<(), error::Error> {
+        let (dbus_name, run_server_handle) = run_service_server().await;
+        let session_path = open_plain_session(dbus_name.as_str()).await?;
+        let collection_object_path =
+            create_collection(dbus_name.as_str(), "test-collection-label").await?;
+
+        let connection = zbus::Connection::session().await?;
+        let item_attributes = collections::HashMap::from([
+            ("key-one".to_string(), "value-one".to_string()),
+            ("key-two".to_string(), "value-two".to_string()),
+        ]);
+        let item_properties = item::ItemReadWriteProperties {
+            attributes: item_attributes.clone(),
+            label: "test-item-label".to_owned(),
+        };
+
+        let secret = secret::Secret {
+            session: session_path,
+            value: "a-very-important-secret".into(),
+            parameters: Vec::new(),
+            content_type: "text/plain; charset=utf8".to_string(),
+        };
+        let reply = connection
+            .call_method(
+                Some(dbus_name.as_str()),
+                collection_object_path.as_str(),
+                Some("org.freedesktop.Secret.Collection"),
+                "CreateItem",
+                &(item_properties, secret, false),
+            )
+            .await
+            .unwrap();
+
+        let body = reply.body();
+        let (item_object_path, _): (zvariant::ObjectPath<'_>, zvariant::ObjectPath<'_>) =
+            body.deserialize().unwrap();
+
+        let reply = connection
+            .call_method(
+                Some(dbus_name.as_str()),
+                collection_object_path.as_str(),
+                Some("org.freedesktop.Secret.Collection"),
+                "SearchItems",
+                &(item_attributes),
+            )
+            .await
+            .unwrap();
+
+        let body = reply.body();
+        let found_items: Vec<zvariant::ObjectPath<'_>> = body.deserialize().unwrap();
+
+        assert_eq!(found_items.len(), 1);
+        assert_eq!(found_items.get(0).unwrap(), &item_object_path);
+
+        run_server_handle.abort();
+        assert!(run_server_handle.await.unwrap_err().is_cancelled());
+
+        Ok(())
+    }
+}

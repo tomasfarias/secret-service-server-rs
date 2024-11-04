@@ -327,14 +327,13 @@ mod tests {
         let (dbus_name, run_server_handle) = run_service_server().await;
 
         let connection = zbus::Connection::session().await?;
-        let collection_properties = collections::HashMap::from([(
-            "org.freedesktop.Secret.Collection.Label",
-            zvariant::Value::new("test-label"),
-        )]);
+        let collection_properties = collection::CollectionReadWriteProperties {
+            label: "test-label".to_string(),
+        };
 
         let reply = connection
             .call_method(
-                Some(dbus_name),
+                Some(dbus_name.as_str()),
                 "/org/freedesktop/secrets",
                 Some("org.freedesktop.Secret.Service"),
                 "CreateCollection",
@@ -347,6 +346,24 @@ mod tests {
         let (collection_object_path, prompt): (zvariant::ObjectPath<'_>, zvariant::ObjectPath<'_>) =
             body.deserialize().unwrap();
 
+        let reply = connection
+            .call_method(
+                Some(dbus_name.as_str()),
+                &collection_object_path,
+                Some("org.freedesktop.DBus.Properties"),
+                "Get",
+                &(
+                    "org.freedesktop.Secret.Collection".to_string(),
+                    "Label".to_string(),
+                ),
+            )
+            .await
+            .unwrap();
+
+        let body = reply.body();
+        let collection_value = body.deserialize::<zvariant::Value>().unwrap();
+        let collection_label: String = collection_value.downcast().unwrap();
+
         run_server_handle.abort();
         assert!(run_server_handle.await.unwrap_err().is_cancelled());
 
@@ -354,6 +371,7 @@ mod tests {
             .as_str()
             .starts_with("/org/freedesktop/secrets/collection/"));
         assert_eq!(prompt.as_str(), "/");
+        assert_eq!(collection_label.as_str(), "test-label");
 
         Ok(())
     }
