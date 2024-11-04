@@ -200,7 +200,7 @@ impl Collection {
     ) -> Result<zvariant::ObjectPath<'_>, error::Error> {
         for item in self.get_mut_children().iter() {
             if let Ok(item_interface) =
-                item::Item::get_interface_from_object_path(&item, object_server).await
+                item::Item::get_interface_from_object_path(item, object_server).await
             {
                 let mut item = item_interface.get_mut().await;
                 item.delete(object_server, item_interface.signal_emitter().to_owned())

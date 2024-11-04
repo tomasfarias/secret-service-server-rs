@@ -67,7 +67,7 @@ impl Service {
 
         let collection_id = uuid::Uuid::new_v4();
         let new_collection = match collection_alias {
-            Some(alias) if alias == "default" => collection::Collection::new_default(self),
+            Some("default") => collection::Collection::new_default(self),
             Some(_) | None => collection::Collection::new(
                 collection_id,
                 &properties.label,
@@ -217,7 +217,7 @@ impl Service {
                 if let Some(collection_path) = self.aliases.get(name) {
                     let collection_interface =
                         collection::Collection::get_interface_from_object_path(
-                            &collection_path,
+                            collection_path,
                             object_server,
                         )
                         .await?;

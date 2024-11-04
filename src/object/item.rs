@@ -33,7 +33,7 @@ impl SecretServiceDbusObject for Item {
     fn get_object_path(&self) -> zvariant::OwnedObjectPath {
         let mut object_path = self.parent_path.as_str().to_owned();
 
-        object_path.push_str("/");
+        object_path.push('/');
         object_path.push_str(
             self.id
                 .as_simple()
@@ -118,11 +118,7 @@ impl Item {
         secret
     }
 
-    pub fn set_secret_with_session(
-        &mut self,
-        secret: secret::Secret,
-        session: &session::Session,
-    ) -> () {
+    pub fn set_secret_with_session(&mut self, secret: secret::Secret, session: &session::Session) {
         // TODO: Check for decryption errors.
         let plaintext = if session.is_encrypted() {
             let iv = secret.parameters;
