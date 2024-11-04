@@ -5,6 +5,7 @@ use futures::{stream, StreamExt};
 
 use crate::error;
 use crate::object::collection;
+use crate::object::collection::CollectionSignals;
 use crate::object::item;
 use crate::object::session;
 use crate::object::{SecretServiceChildObject, SecretServiceDbusObject, SecretServiceParentObject};
@@ -150,6 +151,90 @@ impl Service {
         }
 
         Ok(secrets_map)
+    }
+
+    /// Lock method
+    async fn lock(
+        &mut self,
+        objects: Vec<zvariant::ObjectPath<'_>>,
+        #[zbus(object_server)] object_server: &zbus::ObjectServer,
+        #[zbus(signal_emitter)] emitter: zbus::object_server::SignalEmitter<'_>,
+    ) -> Result<(Vec<zvariant::OwnedObjectPath>, zvariant::ObjectPath<'_>), error::Error> {
+        let mut locked = Vec::new();
+
+        for object in objects.iter() {
+            if let Ok(collection_interface) =
+                collection::Collection::get_interface_from_object_path(object, object_server).await
+            {
+                let mut collection = collection_interface.get_mut().await;
+                if !collection.locked {
+                    collection.locked = true;
+
+                    emitter.collection_changed().await?;
+
+                    locked.push(collection.get_object_path());
+                }
+                continue;
+            }
+
+            if let Ok(item_interface) =
+                item::Item::get_interface_from_object_path(object, object_server).await
+            {
+                let mut item = item_interface.get_mut().await;
+                if !item.locked {
+                    item.locked = true;
+
+                    emitter.item_changed().await?;
+
+                    locked.push(item.get_object_path());
+                }
+                continue;
+            }
+        }
+
+        Ok((locked, zvariant::ObjectPath::from_str_unchecked("/")))
+    }
+
+    /// Lock method
+    async fn unlock(
+        &mut self,
+        objects: Vec<zvariant::ObjectPath<'_>>,
+        #[zbus(object_server)] object_server: &zbus::ObjectServer,
+        #[zbus(signal_emitter)] emitter: zbus::object_server::SignalEmitter<'_>,
+    ) -> Result<(Vec<zvariant::OwnedObjectPath>, zvariant::ObjectPath<'_>), error::Error> {
+        let mut unlocked = Vec::new();
+
+        for object in objects.iter() {
+            if let Ok(collection_interface) =
+                collection::Collection::get_interface_from_object_path(object, object_server).await
+            {
+                let mut collection = collection_interface.get_mut().await;
+                if collection.locked {
+                    collection.locked = false;
+
+                    emitter.collection_changed().await?;
+
+                    unlocked.push(collection.get_object_path());
+                }
+                continue;
+            }
+
+            if let Ok(item_interface) =
+                item::Item::get_interface_from_object_path(object, object_server).await
+            {
+                let mut item = item_interface.get_mut().await;
+                if item.locked {
+                    item.locked = false;
+
+                    emitter.item_changed().await?;
+
+                    unlocked.push(item.get_object_path());
+                }
+                continue;
+            }
+        }
+
+        Ok((unlocked, zvariant::ObjectPath::from_str_unchecked("/")))
     }
 
     /// OpenSession method
