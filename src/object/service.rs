@@ -341,6 +341,49 @@ impl Service {
         }
     }
 
+    /// SearchItems method
+    async fn search_items(
+        &self,
+        attributes: collections::HashMap<String, String>,
+        #[zbus(object_server)] object_server: &zbus::ObjectServer,
+    ) -> (
+        Vec<zvariant::OwnedObjectPath>,
+        Vec<zvariant::OwnedObjectPath>,
+    ) {
+        let mut unlocked = Vec::new();
+        let mut locked = Vec::new();
+
+        for collection_path in self.collections.iter() {
+            if let Ok(collection_interface) =
+                collection::Collection::get_interface_from_object_path(
+                    &collection_path.as_ref(),
+                    object_server,
+                )
+                .await
+            {
+                let collection = collection_interface.get().await;
+
+                for item_path in collection.search_items(attributes.clone()).iter() {
+                    if let Ok(item_interface) = item::Item::get_interface_from_object_path(
+                        &item_path.as_ref(),
+                        object_server,
+                    )
+                    .await
+                    {
+                        let item = item_interface.get().await;
+                        if item.locked {
+                            locked.push(item.get_object_path());
+                        } else {
+                            unlocked.push(item.get_object_path());
+                        }
+                    }
+                }
+            }
+        }
+
+        (unlocked, locked)
+    }
+
     /// Collections property
     #[zbus(property)]
     fn collections(&self) -> Vec<zvariant::ObjectPath<'_>> {
@@ -413,6 +456,58 @@ mod tests {
         }
 
         (dbus_name, run_server_handle)
+    }
+
+    async fn create_collection(
+        dbus_name: &str,
+        label: &str,
+    ) -> Result<zvariant::OwnedObjectPath, error::Error> {
+        let connection = zbus::Connection::session().await?;
+        let collection_properties = collections::HashMap::from([(
+            "org.freedesktop.Secret.Collection.Label",
+            zvariant::Value::new(label),
+        )]);
+
+        let reply = connection
+            .call_method(
+                Some(dbus_name),
+                "/org/freedesktop/secrets",
+                Some("org.freedesktop.Secret.Service"),
+                "CreateCollection",
+                &(collection_properties, ""),
+            )
+            .await
+            .unwrap();
+
+        let body = reply.body();
+        let (collection_object_path, _): (zvariant::ObjectPath<'_>, zvariant::ObjectPath<'_>) =
+            body.deserialize().unwrap();
+
+        Ok(collection_object_path.into())
+    }
+
+    async fn open_plain_session(
+        dbus_name: &str,
+    ) -> Result<zvariant::OwnedObjectPath, error::Error> {
+        let connection = zbus::Connection::session().await?;
+        let plain_key: Vec<u8> = Vec::new();
+
+        let reply = connection
+            .call_method(
+                Some(dbus_name),
+                "/org/freedesktop/secrets",
+                Some("org.freedesktop.Secret.Service"),
+                "OpenSession",
+                &("plain", zvariant::Value::from(plain_key)),
+            )
+            .await
+            .unwrap();
+
+        let body = reply.body();
+        let (_, session_path): (zvariant::Value, zvariant::ObjectPath<'_>) =
+            body.deserialize().unwrap();
+
+        Ok(session_path.into())
     }
 
     #[tokio::test]
@@ -775,6 +870,81 @@ mod tests {
         assert!(run_server_handle.await.unwrap_err().is_cancelled());
 
         assert!(session_path.starts_with("/org/freedesktop/secrets/session/"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_search_items() -> Result<(), error::Error> {
+        let (dbus_name, run_server_handle) = run_service_server().await;
+        let session_path = open_plain_session(dbus_name.as_str()).await?;
+        let collection_one_object_path =
+            create_collection(dbus_name.as_str(), "test-collection-1").await?;
+        let collection_two_object_path =
+            create_collection(dbus_name.as_str(), "test-collection-2").await?;
+
+        let connection = zbus::Connection::session().await?;
+        let item_attributes =
+            collections::HashMap::from([("key-one".to_string(), "value-one".to_string())]);
+
+        let mut created_items: Vec<zvariant::OwnedObjectPath> = Vec::new();
+        for collection_object_path in vec![collection_one_object_path, collection_two_object_path] {
+            let item_properties = item::ItemReadWriteProperties {
+                attributes: item_attributes.clone(),
+                label: "test-item-label".to_owned(),
+            };
+
+            let secret = secret::Secret {
+                session: session_path.clone(),
+                value: "a-very-important-secret".into(),
+                parameters: Vec::new(),
+                content_type: "text/plain; charset=utf8".to_string(),
+            };
+            let reply = connection
+                .call_method(
+                    Some(dbus_name.as_str()),
+                    collection_object_path.as_str(),
+                    Some("org.freedesktop.Secret.Collection"),
+                    "CreateItem",
+                    &(item_properties, secret, false),
+                )
+                .await
+                .unwrap();
+
+            let body = reply.body();
+            let (item_object_path, _): (zvariant::ObjectPath<'_>, zvariant::ObjectPath<'_>) =
+                body.deserialize().unwrap();
+
+            created_items.push(item_object_path.into());
+        }
+
+        let reply = connection
+            .call_method(
+                Some(dbus_name.as_str()),
+                "/org/freedesktop/secrets",
+                Some("org.freedesktop.Secret.Service"),
+                "SearchItems",
+                &(item_attributes),
+            )
+            .await
+            .unwrap();
+
+        let body = reply.body();
+        let (unlocked, locked): (
+            Vec<zvariant::OwnedObjectPath>,
+            Vec<zvariant::OwnedObjectPath>,
+        ) = body.deserialize().unwrap();
+
+        assert_eq!(unlocked.len(), 0);
+        assert_eq!(locked.len(), 2);
+
+        // Compare in any order
+        for created_item in created_items.iter() {
+            assert!(locked.contains(created_item));
+        }
+
+        run_server_handle.abort();
+        assert!(run_server_handle.await.unwrap_err().is_cancelled());
 
         Ok(())
     }

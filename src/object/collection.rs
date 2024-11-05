@@ -222,7 +222,7 @@ impl Collection {
     }
 
     /// SearchItems method
-    fn search_items(
+    pub fn search_items(
         &self,
         attributes: collections::HashMap<String, String>,
     ) -> Vec<zvariant::ObjectPath<'_>> {
