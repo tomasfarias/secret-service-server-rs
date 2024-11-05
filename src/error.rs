@@ -10,6 +10,7 @@ pub enum Error {
     CollectionIsDeleted(String),
     Config(config::ConfigError),
     IsLocked(String),
+    InvalidArgs(String, String),
     NoSession(String),
     NoSuchObject(String),
     SessionIsClosed,
@@ -22,33 +23,36 @@ impl DBusError for Error {
         &self,
         msg: &zbus::message::Header<'_>,
     ) -> zbus::Result<zbus::message::Message> {
-        let message = zbus::message::Message::error(msg, self.name())?.build(&())?;
+        let message = zbus::message::Message::error(msg, self.name())?
+            .build(&self.description().unwrap_or(""))?;
         Ok(message)
     }
 
     fn name(&self) -> zbus_names::ErrorName<'_> {
         match self {
-            Error::AlgorithmUnsupported(_) => {
-                zbus_names::ErrorName::try_from("org.freedesktop.DBus.Error.NotSupported")
-                    .expect("well-known error name")
-            }
-            Error::IsLocked(_) => {
-                zbus_names::ErrorName::try_from("org.freedesktop.Secret.Error.IsLocked")
-                    .expect("well-known error name from the Secret Service spec")
-            }
-            Error::NoSession(_) => {
-                zbus_names::ErrorName::try_from("org.freedesktop.Secret.Error.NoSession")
-                    .expect("well-known error name from the Secret Service spec")
-            }
+            Error::AlgorithmUnsupported(_) => zbus_names::ErrorName::from_static_str_unchecked(
+                "org.freedesktop.DBus.Error.NotSupported",
+            ),
+            Error::IsLocked(_) => zbus_names::ErrorName::from_static_str_unchecked(
+                "org.freedesktop.Secret.Error.IsLocked",
+            ),
+            Error::InvalidArgs(_, _) => zbus_names::ErrorName::from_static_str_unchecked(
+                "org.freedesktop.DBus.Error.InvalidArgs",
+            ),
+            Error::NoSession(_) => zbus_names::ErrorName::from_static_str_unchecked(
+                "org.freedesktop.Secret.Error.NoSession",
+            ),
             // Although `org.freedesktop.DBus.Error.UnknownObject` would also work here,
             // the secret service spec defines a more precise error for these cases.
             // https://specifications.freedesktop.org/secret-service-spec/latest/errors.html#id-1.3.5.5
             Error::NoSuchObject(_) | Error::ItemIsDeleted(_) | Error::CollectionIsDeleted(_) => {
-                zbus_names::ErrorName::try_from("org.freedesktop.Secret.Error.NoSuchObject")
-                    .expect("well-known error name from the Secret Service spec")
+                zbus_names::ErrorName::from_static_str_unchecked(
+                    "org.freedesktop.Secret.Error.NoSuchObject",
+                )
             }
-            _ => zbus_names::ErrorName::try_from("org.freedesktop.DBus.Error.Failed")
-                .expect("well-known error name"),
+            _ => zbus_names::ErrorName::from_static_str_unchecked(
+                "org.freedesktop.DBus.Error.Failed",
+            ),
         }
     }
     fn description(&self) -> Option<&str> {
@@ -70,6 +74,9 @@ impl fmt::Display for Error {
                 "The object '{}' must be unlocked before this action can be carried out",
                 object_path
             ),
+            Error::InvalidArgs(method, msg) => {
+                write!(f, "Invalid arguments received for '{}': {}", method, msg)
+            }
             Error::ItemExists(object_path) => write!(
                 f,
                 "The item '{}' already exists and not asked to replace",
@@ -116,5 +123,11 @@ impl From<zvariant::Error> for Error {
 impl From<config::ConfigError> for Error {
     fn from(value: config::ConfigError) -> Error {
         Error::Config(value)
+    }
+}
+
+impl From<hkdf::InvalidLength> for Error {
+    fn from(value: hkdf::InvalidLength) -> Error {
+        Error::InvalidArgs("OpenSession".to_owned(), format!("{}", value))
     }
 }

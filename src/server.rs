@@ -28,28 +28,30 @@ impl SecretServiceServer {
         let service = service::Service::new();
         let (interface_path, _) = service.serve_at(self.connection.object_server()).await?;
 
-        let interface = service::Service::get_interface_from_object_path(
-            &interface_path.as_ref(),
-            self.connection.object_server(),
-        )
-        .await?;
-
         log::info!("Serving Secret Service interface.");
 
-        let properties = collection::CollectionReadWriteProperties {
-            label: "default".to_owned(),
-        };
-        interface
-            .get_mut()
-            .await
-            .create_collection(
-                properties,
-                "default",
+        {
+            let interface = service::Service::get_interface_from_object_path(
+                &interface_path.as_ref(),
                 self.connection.object_server(),
-                interface.signal_emitter().to_owned(),
             )
             .await?;
 
+            let properties = collection::CollectionReadWriteProperties {
+                label: "default".to_owned(),
+            };
+
+            interface
+                .get_mut()
+                .await
+                .create_collection(
+                    properties,
+                    "default",
+                    self.connection.object_server(),
+                    interface.signal_emitter().to_owned(),
+                )
+                .await?;
+        }
         log::info!("Created default collection.");
 
         let dbus_name = self.dbus_name;

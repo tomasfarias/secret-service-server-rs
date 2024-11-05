@@ -239,35 +239,43 @@ impl Service {
 
     /// OpenSession method
     async fn open_session(
-        &mut self,
+        &self,
         algorithm: &str,
         input: zvariant::Value<'_>,
         #[zbus(object_server)] object_server: &zbus::ObjectServer,
-    ) -> Result<(zvariant::OwnedValue, zvariant::ObjectPath<'_>), error::Error> {
-        let public_key = zvariant::Str::try_from(input).unwrap();
-
+    ) -> Result<(zvariant::Value<'_>, zvariant::ObjectPath<'_>), error::Error> {
         let (new_session, return_value) = match algorithm {
             "plain" => {
+                let public_key_bytes: Vec<u8> = input.try_into()?;
+
+                if let Ok(public_key) = str::from_utf8(&public_key_bytes) {
+                    if !public_key.is_empty() {
+                        return Err(error::Error::InvalidArgs(
+                            "OpenSession".to_owned(),
+                            "Expected input to be '\"\"' when requesting a 'plain' session."
+                                .to_owned(),
+                        ));
+                    }
+                }
                 let session = session::Session::new_plain();
 
-                (
-                    session,
-                    zvariant::Value::new("")
-                        .try_to_owned()
-                        .expect("hard-coded value"),
-                )
+                (session, zvariant::Value::from(""))
             }
             "dh-ietf1024-sha256-aes128-cbc-pkcs7" => {
-                // TODO: Error if invalid key.
-                let (session, server_public_key) =
-                    session::Session::new_dh(public_key.as_str().as_bytes().try_into().unwrap());
+                let public_key_bytes: Vec<u8> = input.try_into()?;
+                let public_key = public_key_bytes.try_into().map_err(|_| {
+                    error::Error::InvalidArgs(
+                        "OpenSession".to_owned(),
+                        "Invalid key length".to_owned(),
+                    )
+                })?;
+                let (session, server_public_key) = session::Session::new_dh(public_key)?;
+                let mut public_key_vec: Vec<u8> = Vec::with_capacity(server_public_key.len());
+                public_key_vec.extend_from_slice(&server_public_key);
 
-                (
-                    session,
-                    zvariant::Value::new(str::from_utf8(&server_public_key).unwrap())
-                        .try_to_owned()
-                        .unwrap(),
-                )
+                let v: zvariant::Value = server_public_key.to_vec().into();
+
+                (session, v)
             }
             algorithm => {
                 return Err(error::Error::AlgorithmUnsupported(algorithm.to_owned()));
@@ -694,6 +702,7 @@ mod tests {
         let (dbus_name, run_server_handle) = run_service_server().await;
 
         let connection = zbus::Connection::session().await?;
+        let plain_key: Vec<u8> = Vec::new();
 
         let reply = connection
             .call_method(
@@ -701,7 +710,7 @@ mod tests {
                 "/org/freedesktop/secrets",
                 Some("org.freedesktop.Secret.Service"),
                 "OpenSession",
-                &("plain", zvariant::Value::from("")),
+                &("plain", zvariant::Value::from(plain_key)),
             )
             .await
             .unwrap();
@@ -714,6 +723,57 @@ mod tests {
         assert!(run_server_handle.await.unwrap_err().is_cancelled());
 
         assert_eq!(algorithm_output.to_string(), "\"\"".to_owned());
+        assert!(session_path.starts_with("/org/freedesktop/secrets/session/"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_open_session_dh() -> Result<(), error::Error> {
+        let (dbus_name, run_server_handle) = run_service_server().await;
+
+        let connection = zbus::Connection::session().await?;
+
+        let secret = x25519_dalek::EphemeralSecret::random();
+        let public_key = x25519_dalek::PublicKey::from(&secret);
+
+        let reply = connection
+            .call_method(
+                Some(dbus_name),
+                "/org/freedesktop/secrets",
+                Some("org.freedesktop.Secret.Service"),
+                "OpenSession",
+                &(
+                    "dh-ietf1024-sha256-aes128-cbc-pkcs7",
+                    zvariant::Value::from(public_key.as_bytes().to_vec()),
+                ),
+            )
+            .await
+            .unwrap();
+
+        let body = reply.body();
+        let (algorithm_output, session_path): (zvariant::Value, zvariant::ObjectPath<'_>) =
+            body.deserialize().unwrap();
+        let server_public_key_bytes: Vec<u8> = algorithm_output.try_into()?;
+        let server_public_key: [u8; 32] = server_public_key_bytes.try_into().unwrap();
+
+        let shared_secret =
+            secret.diffie_hellman(&x25519_dalek::PublicKey::from(server_public_key));
+        let shared_secret_bytes = shared_secret.to_bytes();
+
+        let mut shared_secret_padded = vec![0u8; 128 - shared_secret_bytes.len()];
+        shared_secret_padded.extend_from_slice(&shared_secret_bytes);
+
+        let info = [];
+        let salt = None;
+
+        let (_, hk) = hkdf::Hkdf::<sha2::Sha256>::extract(salt, &shared_secret_padded);
+        let mut key = [0; 16];
+        hk.expand(&info, &mut key).unwrap();
+
+        run_server_handle.abort();
+        assert!(run_server_handle.await.unwrap_err().is_cancelled());
+
         assert!(session_path.starts_with("/org/freedesktop/secrets/session/"));
 
         Ok(())

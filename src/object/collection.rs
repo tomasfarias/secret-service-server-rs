@@ -299,9 +299,11 @@ impl Collection {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::object::session;
     use crate::secret;
     use crate::server;
 
+    use std::str;
     use std::time;
     use uuid;
 
@@ -376,6 +378,7 @@ mod tests {
         dbus_name: &str,
     ) -> Result<zvariant::OwnedObjectPath, error::Error> {
         let connection = zbus::Connection::session().await?;
+        let plain_key: Vec<u8> = Vec::new();
 
         let reply = connection
             .call_method(
@@ -383,7 +386,7 @@ mod tests {
                 "/org/freedesktop/secrets",
                 Some("org.freedesktop.Secret.Service"),
                 "OpenSession",
-                &("plain", zvariant::Value::from("")),
+                &("plain", zvariant::Value::from(plain_key)),
             )
             .await
             .unwrap();
@@ -393,6 +396,51 @@ mod tests {
             body.deserialize().unwrap();
 
         Ok(session_path.into())
+    }
+
+    async fn open_dh_session(
+        dbus_name: &str,
+    ) -> Result<(zvariant::OwnedObjectPath, session::Algorithm), error::Error> {
+        let connection = zbus::Connection::session().await?;
+
+        let secret = x25519_dalek::EphemeralSecret::random();
+        let public_key = x25519_dalek::PublicKey::from(&secret);
+
+        let reply = connection
+            .call_method(
+                Some(dbus_name),
+                "/org/freedesktop/secrets",
+                Some("org.freedesktop.Secret.Service"),
+                "OpenSession",
+                &(
+                    "dh-ietf1024-sha256-aes128-cbc-pkcs7",
+                    zvariant::Value::from(public_key.as_bytes().to_vec()),
+                ),
+            )
+            .await
+            .unwrap();
+
+        let body = reply.body();
+        let (algorithm_output, session_path): (zvariant::Value, zvariant::ObjectPath<'_>) =
+            body.deserialize().unwrap();
+        let server_public_key_bytes: Vec<u8> = algorithm_output.try_into()?;
+        let server_public_key: [u8; 32] = server_public_key_bytes.try_into().unwrap();
+
+        let shared_secret =
+            secret.diffie_hellman(&x25519_dalek::PublicKey::from(server_public_key));
+        let shared_secret_bytes = shared_secret.to_bytes();
+
+        let mut shared_secret_padded = vec![0u8; 128 - shared_secret_bytes.len()];
+        shared_secret_padded.extend_from_slice(&shared_secret_bytes);
+
+        let info = [];
+        let salt = None;
+
+        let (_, hk) = hkdf::Hkdf::<sha2::Sha256>::extract(salt, &shared_secret_padded);
+        let mut key = [0; 16];
+        hk.expand(&info, &mut key).unwrap();
+
+        Ok((session_path.into(), session::Algorithm::Dh { aes_key: key }))
     }
 
     #[tokio::test]
@@ -408,9 +456,10 @@ mod tests {
             label: "test-item-label".to_owned(),
         };
 
+        let plaintext_secret = "a-very-important-secret".to_string();
         let secret = secret::Secret {
-            session: session_path,
-            value: "a-very-important-secret".into(),
+            session: session_path.clone(),
+            value: plaintext_secret.as_str().into(),
             parameters: Vec::new(),
             content_type: "text/plain; charset=utf8".to_string(),
         };
@@ -447,9 +496,110 @@ mod tests {
         let item_value = body.deserialize::<zvariant::Value>().unwrap();
         let item_label: String = item_value.downcast().unwrap();
 
+        let reply = connection
+            .call_method(
+                Some(dbus_name.as_str()),
+                &item_object_path,
+                Some("org.freedesktop.Secret.Item"),
+                "GetSecret",
+                &(session_path.as_ref()),
+            )
+            .await
+            .unwrap();
+
+        let body = reply.body();
+        let new_secret = body.deserialize::<secret::Secret>().unwrap();
+        let new_plaintext_secret = str::from_utf8(&new_secret.value).unwrap().to_string();
+
+        assert_eq!(plaintext_secret, new_plaintext_secret);
         assert!(item_object_path.starts_with(collection_object_path.as_str()));
         assert_eq!(prompt.as_str(), "/");
         assert_eq!(item_label.as_str(), "test-item-label");
+
+        run_server_handle.abort();
+        assert!(run_server_handle.await.unwrap_err().is_cancelled());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_create_item_encrypted() -> Result<(), error::Error> {
+        let (dbus_name, run_server_handle) = run_service_server().await;
+        let (session_path, algorithm) = open_dh_session(dbus_name.as_str()).await?;
+        let collection_object_path =
+            create_collection(dbus_name.as_str(), "test-collection-label").await?;
+
+        let connection = zbus::Connection::session().await?;
+        let item_properties = item::ItemReadWriteProperties {
+            attributes: collections::HashMap::new(),
+            label: "test-item-encrypted-label".to_owned(),
+        };
+
+        let plaintext_secret = "a-very-important-and-secure-secret".to_owned();
+        let (encrypted_secret, iv) = algorithm.encrypt(plaintext_secret.as_bytes());
+        let secret = secret::Secret {
+            session: session_path.clone(),
+            value: encrypted_secret.into(),
+            parameters: iv.into(),
+            content_type: "text/plain; charset=utf8".to_string(),
+        };
+        let reply = connection
+            .call_method(
+                Some(dbus_name.as_str()),
+                collection_object_path.as_str(),
+                Some("org.freedesktop.Secret.Collection"),
+                "CreateItem",
+                &(item_properties, secret, false),
+            )
+            .await
+            .unwrap();
+
+        let body = reply.body();
+        let (item_object_path, prompt): (zvariant::ObjectPath<'_>, zvariant::ObjectPath<'_>) =
+            body.deserialize().unwrap();
+
+        let reply = connection
+            .call_method(
+                Some(dbus_name.as_str()),
+                &item_object_path,
+                Some("org.freedesktop.DBus.Properties"),
+                "Get",
+                &(
+                    "org.freedesktop.Secret.Item".to_string(),
+                    "Label".to_string(),
+                ),
+            )
+            .await
+            .unwrap();
+
+        let body = reply.body();
+        let item_value = body.deserialize::<zvariant::Value>().unwrap();
+        let item_label: String = item_value.downcast().unwrap();
+
+        let reply = connection
+            .call_method(
+                Some(dbus_name.as_str()),
+                &item_object_path,
+                Some("org.freedesktop.Secret.Item"),
+                "GetSecret",
+                &(session_path.as_ref()),
+            )
+            .await
+            .unwrap();
+
+        let body = reply.body();
+        let new_secret = body.deserialize::<secret::Secret>().unwrap();
+        let decrypted_secret = str::from_utf8(&algorithm.decrypt(
+            new_secret.value.as_slice(),
+            new_secret.parameters.as_slice(),
+        ))
+        .unwrap()
+        .to_string();
+
+        assert_eq!(decrypted_secret, plaintext_secret);
+        assert!(item_object_path.starts_with(collection_object_path.as_str()));
+        assert_eq!(prompt.as_str(), "/");
+        assert_eq!(item_label.as_str(), "test-item-encrypted-label");
 
         run_server_handle.abort();
         assert!(run_server_handle.await.unwrap_err().is_cancelled());

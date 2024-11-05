@@ -87,7 +87,7 @@ impl Session {
         }
     }
 
-    pub fn new_dh(client_public_key: [u8; 32]) -> (Session, [u8; 32]) {
+    pub fn new_dh(client_public_key: [u8; 32]) -> Result<(Session, [u8; 32]), error::Error> {
         let secret = x25519_dalek::EphemeralSecret::random();
         let public_key = x25519_dalek::PublicKey::from(&secret);
 
@@ -103,15 +103,15 @@ impl Session {
 
         let (_, hk) = hkdf::Hkdf::<sha2::Sha256>::extract(salt, &shared_secret_padded);
         let mut output = [0; 16];
-        hk.expand(&info, &mut output).unwrap();
+        hk.expand(&info, &mut output)?;
 
-        (
+        Ok((
             Session {
                 algorithm: Algorithm::Dh { aes_key: output },
                 id: uuid::Uuid::new_v4(),
             },
             public_key.to_bytes(),
-        )
+        ))
     }
 
     pub fn encrypt(&self, plaintext: &[u8]) -> (Vec<u8>, Vec<u8>) {
