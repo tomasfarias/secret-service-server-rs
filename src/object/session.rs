@@ -6,7 +6,7 @@
 use aes::cipher::{block_padding, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
 
 use crate::error;
-use crate::object::SecretServiceDbusObject;
+use crate::object::DbusObject;
 
 type Aes128CbcEnc = cbc::Encryptor<aes::Aes128>;
 type Aes128CbcDec = cbc::Decryptor<aes::Aes128>;
@@ -52,7 +52,7 @@ pub struct Session {
     id: uuid::Uuid,
 }
 
-impl SecretServiceDbusObject for Session {
+impl DbusObject for Session {
     fn get_object_path(&self) -> zvariant::OwnedObjectPath {
         let mut object_path = "/org/freedesktop/secrets/session/".to_owned();
         object_path.push_str(

@@ -1,7 +1,7 @@
 use crate::error;
 use crate::object::collection;
 use crate::object::service;
-use crate::object::SecretServiceDbusObject;
+use crate::object::DbusObject;
 
 #[derive(Debug)]
 pub struct SecretServiceServer {

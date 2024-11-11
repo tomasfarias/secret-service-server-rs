@@ -1,10 +1,10 @@
 use std::env;
 use std::path;
 
-mod error;
-mod object;
-mod secret;
-mod server;
+pub mod error;
+pub mod object;
+pub mod secret;
+pub mod server;
 
 #[tokio::main]
 async fn main() -> Result<(), error::Error> {

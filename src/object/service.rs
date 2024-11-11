@@ -8,7 +8,7 @@ use crate::object::collection;
 use crate::object::collection::CollectionSignals;
 use crate::object::item;
 use crate::object::session;
-use crate::object::{SecretServiceChildObject, SecretServiceDbusObject, SecretServiceParentObject};
+use crate::object::{DbusChildObject, DbusObject, DbusParentObject};
 
 use crate::secret;
 
@@ -27,13 +27,13 @@ impl Service {
     }
 }
 
-impl SecretServiceDbusObject for Service {
+impl DbusObject for Service {
     fn get_object_path(&self) -> zvariant::OwnedObjectPath {
         zvariant::ObjectPath::from_str_unchecked("/org/freedesktop/secrets").into()
     }
 }
 
-impl SecretServiceParentObject for Service {
+impl DbusParentObject for Service {
     fn get_children(&self) -> &collections::HashSet<zvariant::OwnedObjectPath> {
         &self.collections
     }

@@ -5,15 +5,15 @@ use std::time;
 use crate::error;
 use crate::object::collection;
 use crate::object::session;
-use crate::object::{SecretServiceChildObject, SecretServiceDbusObject};
+use crate::object::{DbusChildObject, DbusObject};
 use crate::secret;
 
 #[derive(Debug, PartialEq)]
 pub struct Item {
     pub attributes: collections::HashMap<String, String>,
     pub created: u64,
-    id: uuid::Uuid,
-    label: String,
+    pub id: uuid::Uuid,
+    pub label: String,
     pub locked: bool,
     pub modified: u64,
     pub parent_path: zvariant::OwnedObjectPath,
@@ -29,7 +29,7 @@ pub struct ItemReadWriteProperties {
     pub label: String,
 }
 
-impl SecretServiceDbusObject for Item {
+impl DbusObject for Item {
     fn get_object_path(&self) -> zvariant::OwnedObjectPath {
         let mut object_path = self.parent_path.as_str().to_owned();
 
@@ -44,7 +44,7 @@ impl SecretServiceDbusObject for Item {
     }
 }
 
-impl SecretServiceChildObject for Item {
+impl DbusChildObject for Item {
     type Parent = collection::Collection;
 
     fn get_parent_path(&self) -> zvariant::ObjectPath<'_> {
