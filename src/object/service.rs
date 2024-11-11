@@ -27,6 +27,12 @@ impl Service {
     }
 }
 
+impl Default for Service {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DbusObject for Service {
     fn get_object_path(&self) -> zvariant::OwnedObjectPath {
         zvariant::ObjectPath::from_str_unchecked("/org/freedesktop/secrets").into()
