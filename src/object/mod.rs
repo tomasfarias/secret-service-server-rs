@@ -7,6 +7,9 @@ pub mod session;
 
 use crate::error;
 
+/// Trait implemented for Secret Service Dbus objects.
+///
+/// Provides methods to serve, remove, and identify an object in Dbus.
 pub trait DbusObject: zbus::object_server::Interface {
     fn get_object_path(&self) -> zvariant::OwnedObjectPath;
 
@@ -52,12 +55,20 @@ pub trait DbusObject: zbus::object_server::Interface {
     }
 }
 
+/// Trait implemented by Secret Service Dbus objects that parent other objects.
+///
+/// For example, an object implementing the `org.freedesktop.Secret.Service` interface
+/// will have a set of collections as children, and said collections can be parents of
+/// items.
+/// Methods in this trait allow access to said children mutable and immutable access to
+/// said children.
 pub trait DbusParentObject {
     fn get_children(&self) -> &collections::HashSet<zvariant::OwnedObjectPath>;
 
     fn get_mut_children(&mut self) -> &mut collections::HashSet<zvariant::OwnedObjectPath>;
 }
 
+/// Trait implemented by Secret Service Dbus objects that are children of other objects.
 pub trait DbusChildObject: DbusObject {
     type Parent: DbusObject + DbusParentObject;
 

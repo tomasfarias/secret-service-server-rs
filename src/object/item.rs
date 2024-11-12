@@ -91,7 +91,7 @@ impl Item {
             created,
             id,
             label: label.to_owned(),
-            locked: true,
+            locked: false,
             modified: created,
             parent_path: collection.get_object_path().clone(),
             secret: plaintext,

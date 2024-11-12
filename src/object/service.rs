@@ -12,6 +12,7 @@ use crate::object::{DbusChildObject, DbusObject, DbusParentObject};
 
 use crate::secret;
 
+/// Secret Service struct implementing `org.freedesktop.Secret.Service` interface.
 #[derive(Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct Service {
     aliases: collections::HashMap<String, zvariant::OwnedObjectPath>,
@@ -941,13 +942,172 @@ mod tests {
             Vec<zvariant::OwnedObjectPath>,
         ) = body.deserialize().unwrap();
 
-        assert_eq!(unlocked.len(), 0);
-        assert_eq!(locked.len(), 2);
+        assert_eq!(unlocked.len(), 2);
+        assert_eq!(locked.len(), 0);
 
         // Compare in any order
         for created_item in created_items.iter() {
-            assert!(locked.contains(created_item));
+            assert!(unlocked.contains(created_item));
         }
+
+        run_server_handle.abort();
+        assert!(run_server_handle.await.unwrap_err().is_cancelled());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_lock_unlock() -> Result<(), error::Error> {
+        let (dbus_name, run_server_handle) = run_service_server().await;
+        let session_path = open_plain_session(dbus_name.as_str()).await?;
+        let collection_object_path =
+            create_collection(dbus_name.as_str(), "test-collection-1").await?;
+
+        let connection = zbus::Connection::session().await?;
+        let item_attributes =
+            collections::HashMap::from([("key-one".to_string(), "value-one".to_string())]);
+
+        let item_properties = item::ItemReadWriteProperties {
+            attributes: item_attributes.clone(),
+            label: "test-item-label".to_owned(),
+        };
+
+        let secret = secret::Secret {
+            session: session_path.clone(),
+            value: "a-very-important-secret".into(),
+            parameters: Vec::new(),
+            content_type: "text/plain; charset=utf8".to_string(),
+        };
+        let reply = connection
+            .call_method(
+                Some(dbus_name.as_str()),
+                collection_object_path.as_str(),
+                Some("org.freedesktop.Secret.Collection"),
+                "CreateItem",
+                &(item_properties, secret, false),
+            )
+            .await
+            .unwrap();
+
+        let body = reply.body();
+        let (item_object_path, _): (zvariant::ObjectPath<'_>, zvariant::ObjectPath<'_>) =
+            body.deserialize().unwrap();
+
+        let reply = connection
+            .call_method(
+                Some(dbus_name.as_str()),
+                "/org/freedesktop/secrets",
+                Some("org.freedesktop.Secret.Service"),
+                "Lock",
+                &(vec![
+                    collection_object_path.as_ref().clone(),
+                    item_object_path.clone(),
+                ]),
+            )
+            .await
+            .unwrap();
+
+        let body = reply.body();
+        let (locked, _): (Vec<zvariant::OwnedObjectPath>, zvariant::ObjectPath<'_>) =
+            body.deserialize().unwrap();
+
+        let reply = connection
+            .call_method(
+                Some(dbus_name.as_str()),
+                &item_object_path,
+                Some("org.freedesktop.DBus.Properties"),
+                "Get",
+                &(
+                    "org.freedesktop.Secret.Item".to_string(),
+                    "Locked".to_string(),
+                ),
+            )
+            .await
+            .unwrap();
+
+        let body = reply.body();
+        let item_value = body.deserialize::<zvariant::Value>().unwrap();
+        let item_locked: bool = item_value.downcast().unwrap();
+
+        let reply = connection
+            .call_method(
+                Some(dbus_name.as_str()),
+                &collection_object_path,
+                Some("org.freedesktop.DBus.Properties"),
+                "Get",
+                &(
+                    "org.freedesktop.Secret.Collection".to_string(),
+                    "Locked".to_string(),
+                ),
+            )
+            .await
+            .unwrap();
+
+        let body = reply.body();
+        let collection_value = body.deserialize::<zvariant::Value>().unwrap();
+        let collection_locked: bool = collection_value.downcast().unwrap();
+
+        assert!(collection_locked);
+        assert!(item_locked);
+        assert_eq!(locked.len(), 2);
+
+        let reply = connection
+            .call_method(
+                Some(dbus_name.as_str()),
+                "/org/freedesktop/secrets",
+                Some("org.freedesktop.Secret.Service"),
+                "Unlock",
+                &(vec![
+                    collection_object_path.as_ref().clone(),
+                    item_object_path.clone(),
+                ]),
+            )
+            .await
+            .unwrap();
+
+        let body = reply.body();
+        let (unlocked, _): (Vec<zvariant::OwnedObjectPath>, zvariant::ObjectPath<'_>) =
+            body.deserialize().unwrap();
+
+        let reply = connection
+            .call_method(
+                Some(dbus_name.as_str()),
+                &item_object_path,
+                Some("org.freedesktop.DBus.Properties"),
+                "Get",
+                &(
+                    "org.freedesktop.Secret.Item".to_string(),
+                    "Locked".to_string(),
+                ),
+            )
+            .await
+            .unwrap();
+
+        let body = reply.body();
+        let item_value = body.deserialize::<zvariant::Value>().unwrap();
+        let item_locked: bool = item_value.downcast().unwrap();
+
+        let reply = connection
+            .call_method(
+                Some(dbus_name.as_str()),
+                &collection_object_path,
+                Some("org.freedesktop.DBus.Properties"),
+                "Get",
+                &(
+                    "org.freedesktop.Secret.Collection".to_string(),
+                    "Locked".to_string(),
+                ),
+            )
+            .await
+            .unwrap();
+
+        let body = reply.body();
+        let collection_value = body.deserialize::<zvariant::Value>().unwrap();
+        let collection_locked: bool = collection_value.downcast().unwrap();
+
+        assert!(!collection_locked);
+        assert!(!item_locked);
+        assert_eq!(unlocked.len(), 2);
 
         run_server_handle.abort();
         assert!(run_server_handle.await.unwrap_err().is_cancelled());
